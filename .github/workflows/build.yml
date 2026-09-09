@@ -1,0 +1,96 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Reconstruct Android Folder & Fix SDK Version
+        run: |
+          flutter create . --platforms=android
+          sed -i 's/minSdkVersion.*/minSdkVersion 21/g' android/app/build.gradle || true
+          sed -i 's/minSdk = .*/minSdk = 21/g' android/app/build.gradle || true
+
+      - name: Add camera & storage permissions to AndroidManifest
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if ! grep -q "android.permission.CAMERA" "$MANIFEST"; then
+            sed -i '/<manifest xmlns:android/a\    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />' "$MANIFEST"
+          fi
+          cat "$MANIFEST"
+
+      - name: Add ProGuard rules for ML Kit text recognition
+        run: |
+          PROGUARD=android/app/proguard-rules.pro
+          touch "$PROGUARD"
+          cat >> "$PROGUARD" << 'EOF'
+
+          # نستخدم فقط قارئ النصوص اللاتينية (Latin) من ML Kit Text Recognition.
+          # المكتبة نفسها تشير إلى مكتبات اللغات الأخرى (صيني/ياباني/كوري/ديفاناغاري)
+          # كخيارات اختيارية غير مضمّنة في المشروع، فيفشل R8 أثناء بناء نسخة الـ
+          # release ما لم نتجاهل التحذيرات الخاصة بها صراحة هنا.
+          -dontwarn com.google.mlkit.vision.text.chinese.**
+          -dontwarn com.google.mlkit.vision.text.devanagari.**
+          -dontwarn com.google.mlkit.vision.text.japanese.**
+          -dontwarn com.google.mlkit.vision.text.korean.**
+          -keep class com.google.mlkit.vision.text.** { *; }
+          -keep class com.google.mlkit.vision.text.latin.** { *; }
+          EOF
+
+      - name: Ensure build.gradle applies proguard-rules.pro on release
+        run: |
+          python3 - << 'PYEOF'
+          import re
+
+          path = "android/app/build.gradle"
+          with open(path, "r", encoding="utf-8") as f:
+              content = f.read()
+
+          if "proguard-rules.pro" in content:
+              print("proguard-rules.pro already referenced - nothing to do.")
+          else:
+              match = re.search(r"release\s*\{", content)
+              if not match:
+                  raise SystemExit("Could not find a release { } block in build.gradle to patch.")
+              insert_at = match.end()
+              addition = (
+                  "\n            minifyEnabled true"
+                  "\n            shrinkResources true"
+                  "\n            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'"
+              )
+              content = content[:insert_at] + addition + content[insert_at:]
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(content)
+              print("Patched build.gradle to apply proguard-rules.pro.")
+          PYEOF
+
+      - name: Get Dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release --no-tree-shake-icons
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk

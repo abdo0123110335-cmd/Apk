@@ -1,10 +1,12 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:uuid/uuid.dart';
+import 'package:intl/intl.dart';
 import '../models/client.dart';
 import '../models/bill_of_lading.dart';
 import '../models/shipment_document.dart';
 import '../models/clearance_invoice.dart';
+import '../models/payment.dart';
 
 class DatabaseService {
   static final DatabaseService instance = DatabaseService._init();
@@ -24,7 +26,7 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -98,6 +100,17 @@ class DatabaseService {
         category TEXT
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE payments (
+        id TEXT PRIMARY KEY,
+        billOfLadingId TEXT NOT NULL,
+        clientId TEXT,
+        amount REAL,
+        note TEXT,
+        date TEXT
+      )
+    ''');
   }
 
   Future _upgradeDB(Database db, int oldVersion, int newVersion) async {
@@ -154,6 +167,19 @@ class DatabaseService {
         )
       ''');
     }
+
+    if (oldVersion < 4) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+          id TEXT PRIMARY KEY,
+          billOfLadingId TEXT NOT NULL,
+          clientId TEXT,
+          amount REAL,
+          note TEXT,
+          date TEXT
+        )
+      ''');
+    }
   }
 
   // ---------------- Clients ----------------
@@ -177,6 +203,34 @@ class DatabaseService {
   Future<int> deleteClient(String id) async {
     final db = await instance.database;
     return await db.delete('clients', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<Client?> getClientById(String id) async {
+    final db = await instance.database;
+    final result = await db.query('clients', where: 'id = ?', whereArgs: [id]);
+    if (result.isEmpty) return null;
+    return Client.fromMap(result.first);
+  }
+
+  /// يبحث عن عميل بنفس الاسم (غير حساس لحالة الأحرف/المسافات) وإن لم يجده
+  /// يُنشئ عميلاً جديداً تلقائياً بهذا الاسم. هكذا يبقى كل مستند مرتبطاً بعميل
+  /// حقيقي له ملف واحد ثابت، بدل معرّفات مؤقتة غير مرتبطة بدليل العملاء.
+  Future<Client> findOrCreateClientByName(String name) async {
+    final cleaned = name.trim();
+    final clients = await getClients();
+    for (final c in clients) {
+      if (c.name.trim().toLowerCase() == cleaned.toLowerCase()) return c;
+    }
+    final newClient = Client(
+      id: const Uuid().v4(),
+      name: cleaned,
+      phone: '',
+      taxNumber: '',
+      address: '',
+      advanceBalance: 0.0,
+    );
+    await insertClient(newClient);
+    return newClient;
   }
 
   // ---------------- Bill of Lading ----------------
@@ -206,6 +260,24 @@ class DatabaseService {
     final db = await instance.database;
     final result = await db.query('bill_of_ladings', orderBy: 'date DESC');
     return result.map((json) => BillOfLading.fromMap(json)).toList();
+  }
+
+  Future<List<BillOfLading>> getBillOfLadingsForClient(String clientId) async {
+    final db = await instance.database;
+    final result = await db.query(
+      'bill_of_ladings',
+      where: 'clientId = ?',
+      whereArgs: [clientId],
+      orderBy: 'date DESC',
+    );
+    return result.map((json) => BillOfLading.fromMap(json)).toList();
+  }
+
+  Future<BillOfLading?> getBillOfLadingById(String id) async {
+    final db = await instance.database;
+    final result = await db.query('bill_of_ladings', where: 'id = ?', whereArgs: [id]);
+    if (result.isEmpty) return null;
+    return BillOfLading.fromMap(result.first);
   }
 
   // ---------------- Shipment Documents ----------------
@@ -277,5 +349,109 @@ class DatabaseService {
       inv.items = await getItemsForInvoice(inv.id);
     }
     return invoices;
+  }
+
+  /// يُعيد الفاتورة الواحدة الموحّدة الخاصة بهذه البوليصة (فاتورة واحدة فقط
+  /// لكل بوليصة تجمع كل الرسوم: موانئ + جمارك + أرضيات + إذن + أتعاب...الخ).
+  /// إن وُجدت فواتير قديمة متعددة لنفس البوليصة (من نسخة سابقة من التطبيق)
+  /// يتم دمج كل بنودها في فاتورة واحدة تلقائياً وحذف البقية، حتى لا تتكرر البيانات.
+  /// إن لم توجد أي فاتورة بعد، تُنشأ فاتورة فارغة جديدة وتُعاد.
+  Future<ClearanceInvoice> getOrCreateInvoiceForBillOfLading(
+    String billOfLadingId, {
+    required String clientId,
+    required String clientName,
+    required String billOfLading,
+    String vesselName = '',
+    int containerCount = 0,
+    String declarationNo = '',
+  }) async {
+    final existingList = await getInvoicesForBillOfLading(billOfLadingId);
+    final now = DateFormat('yyyy/MM/dd').format(DateTime.now());
+
+    if (existingList.isEmpty) {
+      final invoice = ClearanceInvoice(
+        id: const Uuid().v4(),
+        billOfLadingId: billOfLadingId,
+        clientId: clientId,
+        clientName: clientName,
+        declarationNo: declarationNo,
+        billOfLading: billOfLading,
+        vesselName: vesselName,
+        containerCount: containerCount,
+        date: now,
+        docTypes: const [],
+        items: [],
+      );
+      await saveInvoiceWithItems(invoice);
+      return invoice;
+    }
+
+    if (existingList.length == 1) {
+      return existingList.first;
+    }
+
+    // دمج عدة فواتير قديمة لنفس البوليصة في فاتورة واحدة
+    final primary = existingList.first;
+    final allItems = <InvoiceItem>[...primary.items];
+    double advance = primary.advancePayment;
+    for (final extra in existingList.skip(1)) {
+      allItems.addAll(extra.items);
+      advance += extra.advancePayment;
+      await deleteInvoice(extra.id);
+    }
+    primary.items = allItems;
+    primary.advancePayment = advance;
+    primary.recomputeCategoryTotals();
+    await saveInvoiceWithItems(primary);
+    return primary;
+  }
+
+  Future<void> deleteInvoice(String invoiceId) async {
+    final db = await instance.database;
+    await db.delete('invoice_items', where: 'invoiceId = ?', whereArgs: [invoiceId]);
+    await db.delete('invoices', where: 'id = ?', whereArgs: [invoiceId]);
+  }
+
+  /// يضيف بنداً جديداً (أو أكثر) إلى فاتورة موجودة، يعيد حساب إجماليات الفئات،
+  /// ويحفظ الفاتورة. هذا هو الأسلوب المستخدم عند إضافة مستند ممسوح ضوئياً جديد
+  /// أو عند إضافة أتعاب/رسوم يدوياً من داخل شاشة الفاتورة.
+  Future<ClearanceInvoice> addItemsToInvoice(ClearanceInvoice invoice, List<InvoiceItem> newItems) async {
+    invoice.items = [...invoice.items, ...newItems];
+    for (final it in newItems) {
+      if (!invoice.docTypes.contains(it.category)) {
+        invoice.docTypes = [...invoice.docTypes, it.category];
+      }
+    }
+    invoice.recomputeCategoryTotals();
+    await saveInvoiceWithItems(invoice);
+    return invoice;
+  }
+
+  // ---------------- Payments ----------------
+
+  Future<int> insertPayment(Payment payment) async {
+    final db = await instance.database;
+    return await db.insert('payments', payment.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<List<Payment>> getPaymentsForBillOfLading(String billOfLadingId) async {
+    final db = await instance.database;
+    final result = await db.query(
+      'payments',
+      where: 'billOfLadingId = ?',
+      whereArgs: [billOfLadingId],
+      orderBy: 'date ASC',
+    );
+    return result.map((json) => Payment.fromMap(json)).toList();
+  }
+
+  Future<double> getTotalPaymentsForBillOfLading(String billOfLadingId) async {
+    final payments = await getPaymentsForBillOfLading(billOfLadingId);
+    return payments.fold<double>(0, (sum, p) => sum + p.amount);
+  }
+
+  Future<int> deletePayment(String id) async {
+    final db = await instance.database;
+    return await db.delete('payments', where: 'id = ?', whereArgs: [id]);
   }
 }

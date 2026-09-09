@@ -4,6 +4,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../models/clearance_invoice.dart';
 import '../models/shipment_document.dart';
+import '../models/payment.dart';
 
 class PDFService {
   static String _invoiceTitle(ClearanceInvoice invoice) {
@@ -22,7 +23,14 @@ class PDFService {
     return 'فاتورة مطالبة تخليص';
   }
 
-  static Future<Uint8List> generateInvoicePDF(ClearanceInvoice invoice) async {
+  static double _paymentsSum(List<Payment> payments) =>
+      payments.fold<double>(0, (sum, p) => sum + p.amount);
+
+  static Future<Uint8List> generateInvoicePDF(
+    ClearanceInvoice invoice, {
+    List<Payment> payments = const [],
+    bool isFinal = false,
+  }) async {
     final pdf = pw.Document();
     final font = await PdfGoogleFonts.cairoBold();
     final fontRegular = await PdfGoogleFonts.cairoRegular();
@@ -98,7 +106,10 @@ class PDFService {
                     pw.Column(
                       crossAxisAlignment: pw.CrossAxisAlignment.end,
                       children: [
-                        pw.Text(_invoiceTitle(invoice), style: pw.TextStyle(font: font, fontSize: 14, color: PdfColors.amber)),
+                        pw.Text(
+                          isFinal ? 'فاتورة نهائية' : _invoiceTitle(invoice),
+                          style: pw.TextStyle(font: font, fontSize: 14, color: PdfColors.amber),
+                        ),
                         pw.Text('التاريخ: ${invoice.date}', style: pw.TextStyle(font: fontRegular, fontSize: 10, color: PdfColors.white)),
                         if (invoice.declarationNo.isNotEmpty)
                           pw.Text('رقم الإقرار: ${invoice.declarationNo}', style: pw.TextStyle(font: fontRegular, fontSize: 10, color: PdfColors.white)),
@@ -150,6 +161,23 @@ class PDFService {
               ),
               pw.SizedBox(height: 15),
 
+              // جدول الدفعات المسددة إن وُجدت
+              if (payments.isNotEmpty) ...[
+                pw.Text('الدفعات المسددة:', style: pw.TextStyle(font: font, fontSize: 11, color: PdfColor.fromHex('#003366'))),
+                pw.SizedBox(height: 6),
+                pw.TableHelper.fromTextArray(
+                  headers: ['التاريخ', 'ملاحظة', 'المبلغ (جنيه سوداني)'],
+                  data: payments
+                      .map((p) => [p.date, p.note.isEmpty ? '-' : p.note, '${p.amount.toStringAsFixed(2)} SDG'])
+                      .toList(),
+                  headerStyle: pw.TextStyle(font: font, color: PdfColors.white, fontSize: 10),
+                  headerDecoration: pw.BoxDecoration(color: PdfColors.teal600),
+                  cellStyle: pw.TextStyle(font: fontRegular, fontSize: 9),
+                  cellAlignment: pw.Alignment.centerRight,
+                ),
+                pw.SizedBox(height: 12),
+              ],
+
               // الإجماليات والتصفية الحسابية
               pw.Container(
                 padding: const pw.EdgeInsets.all(12),
@@ -167,19 +195,34 @@ class PDFService {
                       ],
                     ),
                     pw.Divider(),
-                    pw.Row(
-                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                      children: [
-                        pw.Text('خصم المقاديم / المدفوع مقدماً:', style: pw.TextStyle(font: fontRegular, fontSize: 11, color: PdfColors.red700)),
-                        pw.Text('- ${invoice.advancePayment.toStringAsFixed(2)} SDG', style: pw.TextStyle(font: fontRegular, fontSize: 11, color: PdfColors.red700)),
-                      ],
-                    ),
-                    pw.Divider(),
+                    if (invoice.advancePayment > 0) ...[
+                      pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text('خصم المقاديم / المدفوع مقدماً:', style: pw.TextStyle(font: fontRegular, fontSize: 11, color: PdfColors.red700)),
+                          pw.Text('- ${invoice.advancePayment.toStringAsFixed(2)} SDG', style: pw.TextStyle(font: fontRegular, fontSize: 11, color: PdfColors.red700)),
+                        ],
+                      ),
+                      pw.Divider(),
+                    ],
+                    if (payments.isNotEmpty) ...[
+                      pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text('إجمالي الدفعات المسددة:', style: pw.TextStyle(font: fontRegular, fontSize: 11, color: PdfColors.red700)),
+                          pw.Text('- ${_paymentsSum(payments).toStringAsFixed(2)} SDG', style: pw.TextStyle(font: fontRegular, fontSize: 11, color: PdfColors.red700)),
+                        ],
+                      ),
+                      pw.Divider(),
+                    ],
                     pw.Row(
                       mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                       children: [
                         pw.Text('الصافي المطلوب سداده:', style: pw.TextStyle(font: font, fontSize: 13, color: PdfColor.fromHex('#003366'))),
-                        pw.Text('${invoice.netPayable.toStringAsFixed(2)} SDG', style: pw.TextStyle(font: font, fontSize: 13, color: PdfColor.fromHex('#003366'))),
+                        pw.Text(
+                          '${invoice.netPayableAfterPayments(_paymentsSum(payments)).toStringAsFixed(2)} SDG',
+                          style: pw.TextStyle(font: font, fontSize: 13, color: PdfColor.fromHex('#003366')),
+                        ),
                       ],
                     ),
                   ],

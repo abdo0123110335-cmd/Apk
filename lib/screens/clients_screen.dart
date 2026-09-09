@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/client.dart';
 import '../services/database_service.dart';
 import 'add_client_screen.dart';
+import 'client_bills_screen.dart';
 
 class ClientsScreen extends StatefulWidget {
   const ClientsScreen({super.key});
@@ -58,13 +59,14 @@ class _ClientsScreenState extends State<ClientsScreen> {
                       child: ListTile(
                         leading: const CircleAvatar(
                           backgroundColor: Color(0xFF0099CC),
-                          child: Icon(Icons.business, color: Colors.white),
+                          child: Icon(Icons.folder_shared, color: Colors.white),
                         ),
                         title: Text(c.name, style: const TextStyle(fontWeight: FontWeight.bold)),
                         subtitle: Text('هاتف: ${c.phone} | الرقم الضريبي: ${c.taxNumber}'),
-                        trailing: Text(
-                          '${c.advanceBalance.toStringAsFixed(0)} SDG',
-                          style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
+                        trailing: const Icon(Icons.chevron_left),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => ClientBillsScreen(client: c)),
                         ),
                       ),
                     );

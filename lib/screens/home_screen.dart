@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'clients_screen.dart';
 import 'scan_ocr_screen.dart';
-import 'invoice_archive_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -127,12 +126,12 @@ class HomeScreen extends StatelessWidget {
                 Expanded(
                   child: _buildActionButton(
                     context,
-                    title: 'أرشيف الفواتير',
+                    title: 'قسم الفواتير',
                     icon: Icons.folder_special,
                     color: Colors.orange.shade800,
                     onTap: () => Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const InvoiceArchiveScreen()),
+                      MaterialPageRoute(builder: (_) => const ClientsScreen()),
                     ),
                   ),
                 ),

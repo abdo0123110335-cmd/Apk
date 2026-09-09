@@ -62,7 +62,7 @@ jobs:
           -keep class com.google.mlkit.vision.text.latin.** { *; }
           EOF
 
-      - name: Ensure build.gradle applies proguard-rules.pro on release
+      - name: Disable R8 code shrinking for a stable release build
         run: |
           python3 - << 'PYEOF'
           import os
@@ -75,29 +75,27 @@ jobs:
           with open(path, "r", encoding="utf-8") as f:
               content = f.read()
 
-          if "proguard-rules.pro" in content:
-              print("proguard-rules.pro already referenced - nothing to do.")
+          if is_kts:
+              content = re.sub(r"isMinifyEnabled\s*=\s*true", "isMinifyEnabled = false", content)
+              content = re.sub(r"isShrinkResources\s*=\s*true", "isShrinkResources = false", content)
+              flag_present = "isMinifyEnabled" in content
+              off_block = "\n            isMinifyEnabled = false\n            isShrinkResources = false"
           else:
+              content = re.sub(r"minifyEnabled\s+true", "minifyEnabled false", content)
+              content = re.sub(r"shrinkResources\s+true", "shrinkResources false", content)
+              flag_present = "minifyEnabled" in content
+              off_block = "\n            minifyEnabled false\n            shrinkResources false"
+
+          if not flag_present:
               match = re.search(r"release\s*\{", content)
               if not match:
                   raise SystemExit(f"Could not find a release {{ }} block in {path} to patch.")
               insert_at = match.end()
-              if is_kts:
-                  addition = (
-                      "\n            isMinifyEnabled = true"
-                      "\n            isShrinkResources = true"
-                      '\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")'
-                  )
-              else:
-                  addition = (
-                      "\n            minifyEnabled true"
-                      "\n            shrinkResources true"
-                      "\n            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'"
-                  )
-              content = content[:insert_at] + addition + content[insert_at:]
-              with open(path, "w", encoding="utf-8") as f:
-                  f.write(content)
-              print(f"Patched {path} to apply proguard-rules.pro.")
+              content = content[:insert_at] + off_block + content[insert_at:]
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(content)
+          print(f"Done - {path} release build will no longer be minified/shrunk by R8.")
           PYEOF
 
       - name: Get Dependencies

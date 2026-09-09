@@ -27,8 +27,14 @@ jobs:
       - name: Reconstruct Android Folder & Fix SDK Version
         run: |
           flutter create . --platforms=android
-          sed -i 's/minSdkVersion.*/minSdkVersion 21/g' android/app/build.gradle || true
-          sed -i 's/minSdk = .*/minSdk = 21/g' android/app/build.gradle || true
+          if [ -f android/app/build.gradle.kts ]; then
+            GRADLE_FILE=android/app/build.gradle.kts
+          else
+            GRADLE_FILE=android/app/build.gradle
+          fi
+          echo "Using Gradle file: $GRADLE_FILE"
+          sed -i 's/minSdkVersion.*/minSdkVersion 21/g' "$GRADLE_FILE" || true
+          sed -i 's/minSdk = .*/minSdk = 21/g' "$GRADLE_FILE" || true
 
       - name: Add camera & storage permissions to AndroidManifest
         run: |
@@ -59,9 +65,13 @@ jobs:
       - name: Ensure build.gradle applies proguard-rules.pro on release
         run: |
           python3 - << 'PYEOF'
+          import os
           import re
 
-          path = "android/app/build.gradle"
+          path = "android/app/build.gradle.kts" if os.path.exists("android/app/build.gradle.kts") else "android/app/build.gradle"
+          is_kts = path.endswith(".kts")
+          print(f"Patching: {path}")
+
           with open(path, "r", encoding="utf-8") as f:
               content = f.read()
 
@@ -70,17 +80,24 @@ jobs:
           else:
               match = re.search(r"release\s*\{", content)
               if not match:
-                  raise SystemExit("Could not find a release { } block in build.gradle to patch.")
+                  raise SystemExit(f"Could not find a release {{ }} block in {path} to patch.")
               insert_at = match.end()
-              addition = (
-                  "\n            minifyEnabled true"
-                  "\n            shrinkResources true"
-                  "\n            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'"
-              )
+              if is_kts:
+                  addition = (
+                      "\n            isMinifyEnabled = true"
+                      "\n            isShrinkResources = true"
+                      '\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")'
+                  )
+              else:
+                  addition = (
+                      "\n            minifyEnabled true"
+                      "\n            shrinkResources true"
+                      "\n            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'"
+                  )
               content = content[:insert_at] + addition + content[insert_at:]
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-              print("Patched build.gradle to apply proguard-rules.pro.")
+              print(f"Patched {path} to apply proguard-rules.pro.")
           PYEOF
 
       - name: Get Dependencies

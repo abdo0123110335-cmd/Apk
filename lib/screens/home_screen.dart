@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'clients_screen.dart';
 import 'scan_ocr_screen.dart';
+import 'invoice_archive_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -51,7 +52,7 @@ class HomeScreen extends StatelessWidget {
                 Expanded(
                   child: _buildActionButton(
                     context,
-                    title: 'قراءة فاتورة موانئ',
+                    title: 'فاتورة رسوم موانئ',
                     icon: Icons.receipt_long,
                     color: const Color(0xFF0099CC),
                     onTap: () => Navigator.push(
@@ -64,12 +65,43 @@ class HomeScreen extends StatelessWidget {
                 Expanded(
                   child: _buildActionButton(
                     context,
-                    title: 'قراءة إشعار أسيكودا',
+                    title: 'فاتورة إشعار أسيكودا',
                     icon: Icons.document_scanner,
                     color: const Color(0xFF003366),
                     onTap: () => Navigator.push(
                       context,
                       MaterialPageRoute(builder: (_) => const ScanOCRScreen(docType: 'customs')),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            Row(
+              children: [
+                Expanded(
+                  child: _buildActionButton(
+                    context,
+                    title: 'فاتورة أرضيات الشركة',
+                    icon: Icons.warehouse,
+                    color: Colors.deepPurple,
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ScanOCRScreen(docType: 'storage')),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildActionButton(
+                    context,
+                    title: 'رسوم إذن الشركة',
+                    icon: Icons.fact_check,
+                    color: Colors.brown,
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ScanOCRScreen(docType: 'permit')),
                     ),
                   ),
                 ),
@@ -98,11 +130,10 @@ class HomeScreen extends StatelessWidget {
                     title: 'أرشيف الفواتير',
                     icon: Icons.folder_special,
                     color: Colors.orange.shade800,
-                    onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('سجل الفواتير محفوظ تلقائياً في قاعدة البيانات')),
-                      );
-                    },
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const InvoiceArchiveScreen()),
+                    ),
                   ),
                 ),
               ],
